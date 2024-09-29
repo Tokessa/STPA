@@ -1,0 +1,1434 @@
+// stakeholder: 
+//     - company, which produced steam boiler:
+//          - wants customers satisfaction, so long functioning steam boiler
+//     - company, which uses steam boiler:
+//          - wants good production -> money
+//          - no accidents that causes harm to image / employees / environment
+//          - wants functioning steam boiler
+//     - steam boiler operator:
+//          - wants safe work environment
+//     - clients:
+//          - wants steam 
+//     - residents near the company:
+//          - wants good living conditions
+
+Losses
+L1 "Loss of life or injury"
+L2 "Loss or damage to physical units"
+L3 "Loss or damage to proper communication among system components"
+L4 "Loss or damage to objects or environment around the system"
+L5 "Loss of revenue"
+
+Hazards
+H1 "Steam-boiler is outside of safe water levels" [L1, L2, L3, L4, L5] {
+    H1.1 "Water level is too low"   // could heat up metal, which leads to breakdown and leaks
+                                    // could lead to too high pressure -> explosion
+    H1.2 "Water level is too high"  // water could be carried over the steam -> steam value reduction / damage to steam-system
+                                    // disrupt water level sensor
+}
+H2 "The heat is outside safe levels" [L1, L2, L3, L4, L5]
+H3 "System integrity is lost" [L1, L2, L3, L4, L5]
+H4 "Inadequate steam production" [L5]
+H5 "Wrong operation mode" [L1, L2, L4, L5] // also STOP
+
+
+SystemConstraints
+SC1 "Water levels must always be inside the predefined boundaries and otherwise undergo an emergency stop" [H1] {
+    SC1.1 "If the water level is too low, then this should be detected by the water level sensor and the pumps shall be activated" [H1.1]
+    SC1.2 "If the water level is to high, then this should be detected by the water level sensor and the pumps shall be deactivated" [H1.2]
+
+}
+SC2 "The heat must always be at a safe level" [H2]
+SC3 "The system integrity must be maintained under worst-case condition" [H3]
+SC4 "The steam production must always be at a satisfactory level, if the water level is inside its boundaries" [H4]
+SC5 "The system must be in the correct mode under worst-case conditions" [H5]
+
+
+ControlStructure
+CS {
+    Operator {
+        hierarchyLevel 0
+        processModel {
+            pumpSubsystemDefective: [yes=[true], no=[false]]
+            valveDefective:         [yes=[true], no=[false]]
+            levelSensorDefective:   [yes=[true], no=[false]]
+            steamSensorDefective:   [yes=[true], no=[false]]
+            transmissionDefective:  [yes=[true], no=[false]]
+            mode:                   [initialization=[0], 
+                                     normal=[1], degraded=[2], 
+                                     rescue=[3], emergencyStop=[4]]
+            heaterDefective:        [yes=[true], no=[false]]
+        }
+        controlActions {
+            [emergency_stop "STOP"] -> Controller //steam-boiler_waiting from phys Units?
+            [stopHeater "Stop_heater", startHeater "Start_heater"] -> OutsideController
+            [repairPhysUnits "Repair_physical_units", start "Start_booting"] -> PhysicalUnits
+            [repairHeater "Repair_heater"] -> Heater
+        }
+    }
+    Controller {
+        hierarchyLevel 1
+        processModel {
+            unitsReady: [yes=[true], no=[false]]
+            valve: [open=[true], close=[false]] 
+            pumpsThroughput: [belowLimit=[0, P1], lowerLimit=[0,F1], normal=[F1,F2], upperLimit=[F2, MAX], aboveLimit=[P2, MAX]]
+            waterLevel: [belowBoundary=[0,M1], lowerBoundary=[0,N1], insideBoundary=[N1, N2], upperBoundary=[N2, MAX], aboveBoundary=[M2, MAX]]
+            steamLevel: [zero=[0], belowAdequate=(0,S1), adequate=[S1, MAX]]
+            calculatedWaterLevel: [belowBoundary=[0,M1], lowerBoundary=[M1,N1], insideBoundary=[N1, N2], upperBoundary=[N2, M2], aboveBoundary=[M2, MAX]]
+            mode: [initialization=[0], normal=[1], degraded=[2], rescue=[3], emergencyStop=[4]]
+            valveDefective: [yes=[true], no=[false]]
+            pumpSystemDefective: [all, some, none]
+            levelSensorDefective: [yes=[true], no=[false]]
+            steamSensorDefective: [yes=[true], no=[false]]
+            valveDefectiveAck: [received=[true], notReceived=[false]]
+            levelSensorDefectiveAck: [received=[true], notReceived=[false]]
+            steamSensorDefectiveAck:[received=[true], notReceived=[false]]         //how should I do that with the acks in generell and espacially in the units?
+            transmissionFailDet: [yes=[true], no=[false]]
+        }
+        controlActions {
+            [progRead "PROGRAM_READY", mode "MODE(n)"] -> PhysicalUnits
+            [valve "VALVE", valveFaiDet "Valve_failure_Detection", valveRepAck "Valve_repaired_acknowledgement"] -> Valve  //would be valve(n) for opening or closing better
+            [setThroughputRange "Water_throughput([v1, v2])"] -> PumpController
+            [levelFailDec "LEVEL_FAILURE_DETECTION", levelRepAck "LEVEL_REPAIRED_ACKNOWLEDGEMENT"] -> WaterLevelSensor
+            [steamFailDec "STEAM_FAILURE_DETECTION", steamRepAck "STEAM_REPAIRED_ACKNOWLEDGEMENT"] -> SteamLevelSensor
+    
+            
+        }
+        feedback {
+            [modeFed "Mode", physFail "Physical_units_failure(v)", transFailure "Transmission_failure"] -> Operator
+            [waterLevel "Water_level(v)", steamLevel "Steam_level(v)"] -> OutsideController
+        }
+    }
+
+    OutsideController {
+        hierarchyLevel 1
+        processModel{
+            heat: [belowLimit=[MIN, H1], belowNormal=[MIN,L1], normal=[L1, L2], aboveNormal=[L2,MAX], aboveLimit=[H2, MAX]]
+            heater: [on=[true], off=[false]]
+            heaterDefective: [yes=[true], no=[false]]
+            heaterDefectiveAck: [notReceived=[false], received=[true]]
+            heaterDefectiveBefore: [yes=[true], no=[false]]
+            transmissionFailDet: [yes=[true], no=[false]]
+        }
+        controlActions {
+            [heaterOn "Heater_on", heaterOff "Heater_off", heaterFailDec "Heater_failure_detection", heaterRepAck "Heater_repaired_acknowledgement"] -> Heater
+        }
+        feedback {
+            [heaterLevel "Heater_level(v)", heaterfail "Heater_failure", transFailure "Transmission_failure"] -> Operator
+        }
+    }
+
+    PhysicalUnits {
+        hierarchyLevel 2
+        feedback {
+            [physUnitsReady "PHYSICAL_UNITS_READY", boot "STEAM-BOILER_WAITING"] -> Controller
+        }
+
+        PumpsSubsystem {  
+            hierarchyLevel 3
+            PumpController {
+                hierarchyLevel 4
+                processModel {
+                    mode: [initialization=[0], normal=[1], degraded=[2], rescue=[3], emergencyStop=[4]] //needs mode to decide if system is turned on or off
+                    pump1State: [open=[true], close=[false]] 
+                    pump2State: [open=[true], close=[false]] 
+                    pump3State: [open=[true], close=[false]] 
+                    pump4State: [open=[true], close=[false]] 
+                    // waterFlowing1: [yes=[true], no=[false]] //brauche ich das überhaupt?
+                    pump1Defective: [yes=[true], no=[false]]
+                    pump1DefectiveAck: [received=[true], notReceived=[false]]
+                    // waterFlowing2: [yes=[true], no=[false]]
+                    pump2Defective: [yes=[true], no=[false]]
+                    pump2DefectiveAck: [received=[true], notReceived=[false]]
+                    // waterFlowing3: [yes=[true], no=[false]]
+                    pump3Defective: [yes=[true], no=[false]]
+                    pump3DefectiveAck: [received=[true], notReceived=[false]]
+                    // waterFlowing4: [yes=[true], no=[false]]
+                    pump4Defective: [yes=[true], no=[false]]
+                    pump4DefectiveAck: [received=[true], notReceived=[false]]
+                    
+                    pump1SensorDefective: [yes=[true], no=[false]]
+                    pump1SensorDefectiveAck: [received=[true], notReceived=[false]]
+                    pump2SensorDefective: [yes=[true], no=[false]]
+                    pump2SensorDefectiveAck: [received=[true], notReceived=[false]]
+                    pump3SensorDefective: [yes=[true], no=[false]]
+                    pump3SensorDefectiveAck: [received=[true], notReceived=[false]]
+                    pump4SensorDefective: [yes=[true], no=[false]]
+                    pump4SensorDefectiveAck: [received=[true], notReceived=[false]]
+
+                    pumpsThroughput: [belowLimit=[0, P1], lowerLimit=[0,F1], normal=[F1,F2], upperLimit=[F2, MAX], aboveLimit=[P2, MAX]] //when lower or upper, pumps should open / close otherwise we assume that their broken
+                    transmissionFailDet: [yes=[true], no=[false]]
+                }
+                controlActions {
+                    //UCA opens too fast,  not open / close fully?
+                    [openPumps "OPEN_PUMP(n)", closePumps "CLOSE_PUMP(n)", pumpFailDet "PUMP_FAILURE_DETECTION(n)", pumpRepAck "PUMP_REPAIRED_ACKNOWLEDGEMENT(n)"] -> Pumps
+                    [pumpSensorFailDec "PUMP_CONTROL_FAILURE_DETECTION(n)", pumpSensorRepAck "PUMP_CONTROL_REPAIRED_ACKNOWLEDGEMENT(n)"] -> PumpSensors
+                }
+                feedback {
+                    //[pumpsRepair "PUMP_REPAIRED(n)", pumpsState "PUMP_STATE(n,b)", pumpControllSensorRep "PUMP_CONTROL_REPAIRED(n)", pumpControllSensorlState "PUMP_CONTROL_STATE(n,b)"] -> Controller
+                    [throughput "Throughput", pumpSubsystemState "PumpSubsystem_state"] -> Controller
+                }
+            }
+            Pumps {
+                hierarchyLevel 5
+                feedback {
+                    [pumpFailAck "PUMP_FAILURE_ACKNOWLEDGEMENT(n)"] -> PumpController
+                    [states "PUMP_STATE(n,b)", pumpsRep "PUMP_REPAIRED(n)"] -> PumpSensors
+                }
+                Pump1 {
+                    hierarchyLevel 6
+                }
+                Pump2 {
+                    hierarchyLevel 6
+                }
+                Pump3 {
+                    hierarchyLevel 6
+                }
+                Pump4 {
+                    hierarchyLevel 6
+                }
+            }
+        
+            PumpSensors {
+                hierarchyLevel 4
+                feedback {
+                    [states "PUMP_STATE(n,b)", pumpsRep "PUMP_REPAIRED(n)", pumpControllSensorsState "PUMP_CONTROL_STATE(n,b)", pumpControllSensorlRep "PUMP_CONTROL_REPAIRED(n)", pumpControllSensorFailAck "PUMP_CONTROL_FAILURE_ACKNOWLEDGEMENT(n)"] -> PumpController
+                }
+                PumpControllerSensor1 { 
+                    hierarchyLevel 5
+                }
+                PumpControllerSensor2 { 
+                    hierarchyLevel 5
+                }
+                PumpControllerSensor3 { 
+                    hierarchyLevel 5
+                }
+                PumpControllerSensor4 { 
+                    hierarchyLevel 5
+                }
+            }
+        }
+
+        Valve {
+            hierarchyLevel 3
+            feedback {
+               [valveState "Valve_State(n)", valveRepair "Valve_repaired", valveFailAck "Valve_failure_acknowledgemnt"] -> Controller
+            }
+        }
+
+        WaterLevelSensor {
+            hierarchyLevel 3
+            feedback {
+                [level "LEVEL(v)", levelRepair "LEVEL_REPAIRED", levelFailAck "LEVEL_FAILURE_ACKNOWLEDGEMENT"] -> Controller
+            }
+        }
+
+        SteamLevelSensor {
+            hierarchyLevel 3
+            feedback {
+                [steam "STEAM(v)", steamRepair "STEAM_REPAIRED", steamFailAck "STEAM_OUTCOME_FAILURE_ACKNOWLEDGEMENT"] -> Controller
+            }
+        }
+    }
+
+    Heater {
+        feedback {
+            [heat "Heat(v)", hesterState "Heater_state", heaterRepair "Heater_repair", heaterFailAck "Heater_failure_acknowledgement"] -> OutsideController
+        }
+    }
+}
+
+// all system components need to ack repaired and failure messages that they get
+Responsibilities
+Operator {
+    R1 "Stops steam-boiler in an emergency" [SC3, SC5]
+    R2 "Decides what heat-level the heater should have" [SC1, SC2, SC3, SC4]
+    R3 "Decides if it's safe to start the steam-boiler" [SC4, SC5]
+    R4 "Needs to repair broken units" [SC1, SC2, SC3, SC4]
+}
+Controller {
+    R5 "Must adhere to start and stop command from the Operator" [SC1, SC3, SC4, SC5]
+    R6 "Decides what state the valve should have" [SC1, SC3, SC4, SC5]
+    R7 "Decides what throughput the pumpSubsystem shall have" [SC1, SC3, SC4]
+    R8 "Decides what mode the steam-boiler system should be in (also decides the state of the PumpSubsystem)" [SC1, SC3, SC4, SC5]
+    R9 "Detects failures and acts accordingly (send failure to physical units / change mode)" [SC1, SC3, SC4, SC5]
+    R10 "Needs to inform Operator of important system data" [SC2, SC3, SC4, SC5]
+}
+PhysicalUnits {
+    R11 "Must adhere to booting signal from Operator" [SC3, SC4]
+    R12 "Must adhere to commands from Controller" [SC1, SC3, SC4, SC5]
+}
+PumpController {
+    R13 "Start pumps when throughput is too low" [SC1.1, SC3, SC4]
+    R14 "Stop pumps when throughput is too high" [SC1.2,  SC3, SC4]
+    R15 "Detects failures and acts accordingly" [SC1, SC3, SC4]
+    R16 "Needs to inform Controller of important PumpSystem data" [SC1, SC3, SC4, SC5]
+}
+Pumps {
+    R17 "Start pumping when commanded by PumpController" [SC1.1, SC3, SC4]
+    R18 "Stop pumping when commanded by PumpController" [SC1.2, SC3, SC4]
+    R19 "Inform PumpController of state and status" [SC1, SC5]
+
+}
+PumpSensors {
+    R20 "Should only send correct pump sensor data" [SC1, SC3, SC4]
+}
+Valve {
+    R21 "Opens only in initialization mode and when commanded by Controller" [SC1.1, SC3, SC4]
+}
+WaterLevelSensor {
+    R22 "Should only send correct water level data" [SC1, SC3, SC4]
+}
+SteamLevelSensor {
+    R23 "Should only send correct water level data" [SC1, SC3, SC4]
+}
+OutsideController {
+    R24 "Must adhere to the command from the Operator" [SC1, SC2, SC3, SC4]
+    R25 "Decides what the state of the heater should be, so that the heat-level is reached" [SC1, SC2, SC3, SC4]
+    R26 "Needs to inform Operator of heat-level" [SC1, SC2, SC3, SC4]
+    R27 "Detects failures and acts accordingly" [SC2, SC3, SC4]
+}
+Heater {
+    R28 "Start or stop heating when commanded by OusideController" [SC1, SC2, SC3, SC4]
+    R29 "Needs to acknowledge failure message from OutsideController" [SC4, SC5]
+}
+
+
+Context-Table
+RL1 {
+    controlAction: Operator.emergency_stop
+    type: not-provided
+    contexts: {
+        UCA1 [transmissionDefective=yes] [H1, H2, H3, H4]
+        // or when we have an emergency (all the cases where steam boiler goes into emergency stop)
+    }
+}
+RL2 {
+    controlAction: Operator.emergency_stop
+    type: provided
+    contexts: {
+        UCA2 [mode=initialization] [H4] 
+        UCA3 [mode=normal] [H4]
+        UCA4 [mode=degraded] [H4]
+        UCA5 [mode=rescue] [H4]
+    }
+}
+RL3 { 
+    controlAction: Operator.stopHeater
+    type: not-provided
+    contexts: {
+        UCA6 [mode=emergencyStop] [H1, H2, H3] 
+        UCA7 [heaterDefective=yes] [H2, H3]
+    }
+}
+RL4 {
+    controlAction: Operator.stopHeater
+    type: provided
+    contexts: {
+        UCA8 [mode=initialization] [H2, H4]
+        UCA9 [mode=normal] [H2, H4]
+        UCA10 [mode=degraded] [H2, H4]
+        UCA11 [mode=rescue] [H2, H4]
+    }
+}
+RL5 {
+    controlAction: Operator.startHeater
+    type: not-provided
+    contexts: {
+        UCA12 [mode=initialization] [H2, H4]
+    }
+}
+RL6 {
+    controlAction: Operator.startHeater
+    type: provided
+    contexts: {
+        UCA13 [mode=emergencyStop] [H1, H2, H3]
+        UCA14 [heaterDefective=yes] [H3]
+    }
+}
+RL7 {
+    controlAction: Operator.startHeater
+    type: too-late
+    contexts: {
+        UCA15 [mode=normal] [H2, H4]
+        UCA16 [mode=degraded] [H2, H4]
+        UCA17 [mode=rescue] [H2, H4]
+    }
+}
+RL8 {
+    controlAction: Operator.start
+    type: not-provided
+    contexts: {
+        UCA18 [valveDefective=no, levelSensorDefective=no, pumpSubsystemDefective=no, steamSensorDefective=no, heaterDefective=no, transmissionDefective=no] [H4]
+    }
+}
+RL9 {
+    controlAction: Operator.start
+    type: provided
+    contexts: {
+        UCA19 [valveDefective=yes] [H1, H3]
+        UCA20 [levelSensorDefective=yes] [H1, H3]
+        UCA21 [pumpSubsystemDefective=yes] [H1, H3]
+    }
+}
+RL10 {
+    controlAction: Operator.repairPhysUnits
+    type: not-provided
+    contexts: {
+        UCA22 [valveDefective=yes] [H1]
+        UCA23 [levelSensorDefective=yes] [H1, H3, H4]
+        UCA24 [steamSensorDefective=yes] [H4]
+        UCA25 [pumpSubsystemDefective=yes] [H1, H3, H4]
+    }
+}
+RL11 {
+    controlAction: Operator.repairPhysUnits
+    type: provided
+    contexts: {
+        UCA26 [valveDefective=no, levelSensorDefective=no, steamSensorDefective=no, pumpSubsystemDefective=no] [H3, H4, H5]
+    }
+}
+RL12 {
+    controlAction: Controller.progRead
+    type: not-provided
+    contexts: {
+        UCA27 [mode=initialization, waterLevel=insideBoundary, steamLevel=zero, valve=close] [H4, H5]
+    }
+}
+RL13 {
+    controlAction: Controller.progRead
+    type: provided
+    contexts: {
+        UCA28 [mode=initialization, waterLevel=lowerBoundary] [H1, H3, H4, H5] 
+        UCA29 [mode=initialization, waterLevel=upperBoundary] [H1, H3, H4, H5]
+        UCA30 [mode=initialization, steamLevel=belowAdequate] [H3, H5] 
+        UCA31 [mode=initialization, steamLevel=adequate] [H3, H5]
+        UCA32 [mode=initialization, valve=open] [H1, H3, H4, H5]
+        UCA33 [transmissionFailDet=yes] [H3, H5]
+    }
+}
+RL14 {
+    controlAction: Controller.mode
+    type: not-provided
+    contexts: {
+        UCA34 [mode=initialization, unitsReady=yes] [H1, H3, H4, H5]
+        // emergency
+        UCA35 [mode=initialization, steamLevel=adequate] [H3, H5]           // grouping would be nice here
+        UCA36 [mode=initialization, steamLevel=belowAdequate] [H3, H5]
+        UCA37 [mode=initialization, valveDefective=yes] [H3, H5]
+        UCA38 [mode=initialization, levelSensorDefective=yes] [H3, H5]
+        // degraded
+        UCA39 [mode=initialization, steamSensorDefective=yes] [H4, H5]
+        UCA40 [mode=initialization, pumpSystemDefective=some] [H5]
+
+        // emergency
+        UCA41 [mode=normal, waterLevel=belowBoundary] [H1.1, H3, H5]
+        UCA42 [mode=normal, waterLevel=aboveBoundary] [H1.2, H3, H5]
+        // rescue
+        UCA43 [mode=normal, levelSensorDefective=yes] [H1, H3, H5]
+        // degraded
+        UCA44 [mode=normal, steamSensorDefective=yes] [H4, H5]
+        UCA45 [mode=normal, pumpSystemDefective=some] [H5]
+
+        // emergency
+        UCA46 [mode=degraded, waterLevel=belowBoundary] [H1.1, H3, H5]
+        UCA47 [mode=degraded, waterLevel=aboveBoundary] [H1.2, H3, H5]
+        // rescue
+        UCA48 [mode=degraded, levelSensorDefective=yes] [H1, H3, H5]
+        // normal
+        UCA49 [mode=degraded, steamSensorDefective=no, pumpSystemDefective=none] [H5]
+
+        // emergency
+        UCA50 [mode=rescue, waterLevel=belowBoundary] [H1.1, H3, H5]
+        UCA51 [mode=rescue, waterLevel=aboveBoundary] [H1.2, H3, H5]
+        UCA52 [mode=rescue, steamSensorDefective=yes] [H1, H3, H4, H5]
+        UCA53 [mode=rescue, pumpSystemDefective=all] [H1, H3, H4, H5]
+        // degraded
+        UCA54 [mode=rescue, levelSensorDefective=no] [H1, H3, H5]
+        // normal
+        UCA55 [mode=rescue, steamSensorDefective=no, pumpSystemDefective=none, levelSensorDefective=no] [H5]
+
+        UCA56 [transmissionFailDet=yes] [H3, H5]
+    }
+}
+RL15 {
+    controlAction: Controller.mode
+    type: provided
+    contexts: {
+        UCA57 [mode=initialization, unitsReady=no, steamLevel=zero, valveDefective=no, levelSensorDefective=no, steamSensorDefective=no, pumpSystemDefective= none, transmissionFailDet=no] [H1, H3, H4, H5] 
+
+        // no change normal
+        UCA58 [mode=normal, levelSensorDefective=no, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=insideBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA59 [mode=normal, levelSensorDefective=no, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=lowerBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA60 [mode=normal, levelSensorDefective=no, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=upperBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+
+        // no change degraded
+        UCA61 [mode=degraded, levelSensorDefective=no, steamSensorDefective=yes, pumpSystemDefective=some, waterLevel=insideBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA62 [mode=degraded, levelSensorDefective=no, steamSensorDefective=yes, pumpSystemDefective=some, waterLevel=lowerBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA63 [mode=degraded, levelSensorDefective=no, steamSensorDefective=yes, pumpSystemDefective=some, waterLevel=upperBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+
+        // no change rescue
+        UCA64 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=insideBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA65 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=some, waterLevel=insideBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA66 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=lowerBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA67 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=some, waterLevel=lowerBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA68 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=none, waterLevel=upperBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        UCA69 [mode=rescue, levelSensorDefective=yes, steamSensorDefective=no, pumpSystemDefective=some, waterLevel=upperBoundary, transmissionFailDet=no] [H1, H3, H4, H5]
+        // Controller provides incorrect mode change when prompted by physical unit data
+    }
+}
+RL16 {
+    controlAction: Controller.valve
+    type: not-provided
+    contexts: {
+        UCA70 [mode=initialization, waterLevel=aboveBoundary, valve=close] [H1.2, H4]      //open valve command 
+        UCA71 [mode=initialization, waterLevel=insideBoundary, valve=open] [H1.1, H3, H4]  //close valve command 
+        UCA72 [mode=initialization, waterLevel=lowerBoundary, valve=open] [H1.1, H3, H4]   //close valve command 
+    }
+
+}
+RL17 {
+    controlAction: Controller.valve
+    type: provided
+    contexts: {
+        UCA73 [mode=normal] [H1, H3, H4, H5]
+        UCA74 [mode=degraded] [H1, H3, H4, H5]
+        UCA75 [mode=rescue] [H1, H3, H4, H5]
+        UCA76 [mode=emergencyStop] [H5]        
+        UCA77 [mode=initialization, waterLevel=insideBoundary, valve=close] [H1.1, H3, H4] //open valve command
+        UCA78 [mode=initialization, waterLevel=lowerBoundary, valve=close] [H1.1, H3, H4]  //open valve command
+    }
+}
+RL18 {
+    controlAction: Controller.valve
+    type: too-late
+    contexts: {
+        UCA79 [mode=initialization, waterLevel=upperBoundary, valve=close] [H1.2, H4]         
+        UCA80 [mode=initialization, waterLevel=insideBoundary, valve=open] [H1.1, H3, H4]
+        UCA81 [mode=initialization, waterLevel=lowerBoundary, valve=open] [H1.1, H3, H4] 
+    }
+}
+RL19 {
+    controlAction: Controller.valve
+    type: too-early
+    contexts: {
+        UCA82 [mode=initialization, waterLevel=upperBoundary, valve=open] [H1.2, H4]       //close valve command
+    }
+}
+RL20 {
+    controlAction: Controller.setThroughputRange
+    type: not-provided
+    contexts: {
+        UCA83 [waterLevel=lowerBoundary] [H1.1, H3, H4] //mode not rescue
+        UCA84 [waterLevel=upperBoundary] [H1.2, H4]     //mode not rescue 
+        UCA85 [mode=rescue, calculatedWaterLevel=lowerBoundary] [H1.1, H3, H4]
+        UCA86 [mode=rescue, calculatedWaterLevel=upperBoundary] [H1.2, H4]
+    }
+}
+RL21 {
+    controlAction: Controller.setThroughputRange
+    type: too-late
+    contexts: {
+        UCA87 [waterLevel=belowBoundary] [H1.1, H3, H4]
+        UCA88 [waterLevel=aboveBoundary] [H1.2, H4]
+        UCA89 [waterLevel=lowerBoundary, transmissionFailDet=yes] [H1.1, H3, H4]
+        UCA90 [waterLevel=upperBoundary, transmissionFailDet=yes] [H1.2, H4]
+    }
+}
+RL22 {
+    controlAction: PumpController.openPumps
+    type: not-provided
+    contexts: {
+        UCA91 [pumpsThroughput=lowerLimit] [H1.1, H3, H4] 
+        UCA92 [pumpsThroughput=normal] [H4]
+    }
+}
+RL23 {
+    controlAction: PumpController.openPumps
+    type: provided
+    contexts: {
+        UCA93 [pumpsThroughput=upperLimit] [H1.2, H4] 
+        UCA94 [mode=emergencyStop] [H1.1, H3]
+    }
+}
+RL24 {
+    controlAction: PumpController.openPumps
+    type: too-late
+    contexts: {
+        UCA95 [pumpsThroughput=belowLimit] [H1.1, H3, H4]
+        UCA96 [pumpsThroughput=lowerLimit] [H1.1, H3, H4]
+    }
+}
+RL25 {
+    controlAction: PumpController.closePumps
+    type: not-provided
+    contexts: {
+        UCA97 [pumpsThroughput=upperLimit] [H1.2, H4] 
+        UCA98 [mode=emergencyStop] [H1.2, H3]
+    }
+}
+RL26 {
+    controlAction: PumpController.closePumps
+    type: provided
+    contexts: {
+        UCA99 [pumpsThroughput=normal] [H1.1, H4] 
+        UCA100 [pumpsThroughput=lowerLimit] [H1.1, H3, H4]
+    }
+}
+RL27 {
+    controlAction: PumpController.closePumps
+    type: too-late 
+    contexts: {
+        UCA101 [pumpsThroughput=aboveLimit] [H1.2, H3, H4]
+        UCA102 [pumpsThroughput=upperLimit] [H1.2, H4]
+    }
+}
+RL28 {
+    controlAction: PumpController.pumpFailDet
+    type: not-provided
+    contexts: {
+        UCA103 [pump1Defective=yes, pump1DefectiveAck=notReceived, transmissionFailDet=no] [H1,H3, H4, H5]
+        UCA104 [pump2Defective=yes, pump2DefectiveAck=notReceived, transmissionFailDet=no] [H1,H3, H4, H5]
+        UCA105 [pump3Defective=yes, pump3DefectiveAck=notReceived, transmissionFailDet=no] [H1,H3, H4, H5]
+        UCA106 [pump4Defective=yes, pump4DefectiveAck=notReceived, transmissionFailDet=no] [H1,H3, H4, H5]
+    }
+}
+RL29 {
+    controlAction:PumpController.pumpFailDet
+    type: provided
+    contexts: {
+        UCA107 [pump1Defective=no] [H4, H5]
+        UCA108 [pump2Defective=no] [H4, H5] 
+        UCA109 [pump3Defective=no] [H4, H5] 
+        UCA110 [pump4Defective=no] [H4, H5]
+        // here we should also know which pump we send the FailDet message to, because it's only unsafe
+        // when we send the FailDet to the wrong pump
+    }
+}
+RL30 {
+    controlAction: PumpController.pumpRepAck
+    type: not-provided
+    contexts: {
+        UCA111 [pump1Defective=no] [H4, H5] //need to know if before broken
+        UCA112 [pump1Defective=no] [H4, H5]
+        UCA113 [pump1Defective=no] [H4, H5]
+        UCA114 [pump1Defective=no] [H4, H5]
+    }
+}
+RL31 {
+    controlAction: PumpController.pumpRepAck
+    type: provided
+    contexts: {
+        UCA115 [pump1Defective=yes] [H4, H5] 
+        UCA116 [pump1Defective=yes] [H4, H5]
+        UCA117 [pump1Defective=yes] [H4, H5]
+        UCA118 [pump1Defective=yes] [H4, H5]
+        // here we should also know from which pump we got the Rep message, because it's only unsafe
+        // when we send the RepAck to the wrong pump
+    }
+}
+RL32 {
+    controlAction: OutsideController.heaterOn
+    type: not-provided
+    contexts: {
+        UCA119 [heat=belowNormal] [H1.2, H2, H4]
+        UCA120 [heat=normal] [H1.2, H4]
+    }
+}
+RL33 {
+    controlAction: OutsideController.heaterOn
+    type: provided
+    contexts: {
+        UCA121 [heat=aboveNormal] [H1.1, H2, H3, H4]
+        UCA122 [heaterDefective=yes] [H3, H4]
+    }
+}
+RL34 {
+    controlAction: OutsideController.heaterOn
+    type: too-late
+    contexts: {
+        UCA123 [heat=belowLimit] [H1.2, H2, H4]
+        UCA124 [heat=belowNormal] [H1.1, H2, H3, H4]
+          // the transmission failure would also be a problem, when the heat is at normal
+    }
+}
+RL35 {
+    controlAction: OutsideController.heaterOff
+    type: not-provided
+    contexts: {
+        UCA125 [heat=aboveNormal] [H1.1, H2, H3, H4] 
+    }
+}
+RL36 {
+    controlAction: OutsideController.heaterOff
+    type: provided
+    contexts: {
+        UCA126 [heat=normal] [H1.2, H4] 
+        UCA127 [heat=belowNormal] [H1.2, H2, H4]
+    }
+}
+RL37 {
+    controlAction: OutsideController.heaterOff
+    type: too-late 
+    contexts: {
+        UCA128 [heat=aboveLimit] [H1.1, H2, H3, H4]
+        UCA129 [heat=aboveNormal, transmissionFailDet=yes] [H1.1, H2, H3, H4]
+    }
+}
+RL38 {
+    controlAction: OutsideController.heaterFailDec
+    type: not-provided
+    contexts: {
+        UCA130 [heaterDefective=yes, heaterDefectiveAck=notReceived, transmissionFailDet=no] [H2, H3, H4]
+    }
+}
+RL39 {
+    controlAction: OutsideController.heaterFailDec
+    type: provided
+    contexts: {
+        UCA131 [heaterDefective=no] [H4, H5]
+    }
+}
+RL40 {
+    controlAction: OutsideController.heaterFailDec
+    type: too-late
+    contexts: {
+        UCA132 [heaterDefective=yes] [H2, H3, H4]
+    }
+}
+RL41 {
+    controlAction: OutsideController.heaterRepAck
+    type: not-provided
+    contexts: {
+        UCA133 [heaterDefective=no, heaterDefectiveBefore=yes, transmissionFailDet=no] [H4, H5]
+    }
+}
+RL42 {
+    controlAction: OutsideController.heaterRepAck
+    type: provided
+    contexts: {
+        UCA134 [heaterDefective=yes] [H2, H3, H4]
+        UCA135 [heaterDefectiveBefore=no] [H5]
+    }
+}
+RL43 {
+    controlAction: OutsideController.heaterRepAck
+    type: too-late
+    contexts: {
+        UCA136 [heaterDefective=no, heaterDefectiveBefore=yes] [H4, H5]
+    }
+}
+// similar to all other FailDet and RepAck
+
+
+LossScenarios
+Scenario1 for UCA12 "The mode is initialization, but the Controller believes it is above normal, causing the HeaterOn 
+                       control action to be not provided. This could occur if:
+                        - the heater sensor failed
+                        - the response from the heater sensor was delayed
+                        - the heater sensor wasn't properly calibrated before the heater was started
+                        - the heater sensor wasn't correctly installed / repaired before the heater was started
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H2, H4]
+Scenario2 for UCA27 "The Controller fails when the program is finishes with its initialization, causing the progReady control action to not
+                     be provided." [H4, H5]
+Scenario3 for UCA27 "The program finished it initialization successfully, but the control algorithm was delayed with calculating the correct mode
+                     of the steam-boiler, causing the progReady control action not to be provided." [H4, H5]
+Scenario4 for UCA27 "The water level is inside its boundaries, but the Controller believes it is outside its boundaries, causing the progReady 
+                     control action to be not provided. This could occur if:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - the water level sensor wasn't properly calibrated before the boiler was started
+                        - the water level sensor wasn't correctly installed / repaired before the steam-boiler was started
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H4, H5]
+Scenario5 for UCA27 "The steam level is zero, but the Controller believes it is above zero, causing the progReady control action not to be provided.
+                     The scould happens if the following holds
+                        - Failure of the steam level sensor
+                        - delayed response from the steam level sensor
+                        - the steam level sensor wasn't properly calibrated before the boiler was started
+                        - the steam level sensor wasn't correctly installed / repaired before the steam-boiler was started
+                        - the steam level sensor has a drift in its data, due to wear over time, leading to a wrong feedback
+                        - depending on the specific type of steam level sensor, there could be other problems caused by the environment
+                          (rapid temperature changes, wet steam, blockage, condensation, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the steam level" [H4, H5]
+Scenario6 for UCA27 "The valve is closed. The Controller believes that the valve, is still open, causing the progReady control action not to be 
+                     provided. This could be caused by:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - the valve wasn't correctly installed / repaired before the steam-boiler was started
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H4, H5]
+Scenario7 for UCA28 "The mode is initialization and the water level is below normal. But the Controller believes that it is normal, so that
+                     it sends the control action progReady. This could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1, H3, H4, H5]
+Scenario8 for UCA29 "The mode is initialization and the water level is above normal. But the Controller believes that it is normal, so that
+                     it sends the control action progReady. This could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1, H3, H4, H5]
+Scenario9 for UCA30 "The mode is initialization and the steam level is above adequate. But the Controller believes that it is zero, so that
+                     it sends the control action progReady. This could occur, when:
+                        - Failure of the steam level sensor
+                        - delayed response from the steam level sensor
+                        - the steam level sensor has a drift in its data, due to wear over time, leading to a wrong feedback
+                        - depending on the specific type of steam level sensor, there could be other problems caused by the environment
+                          (rapid temperature changes, wet steam, blockage, condensation, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the steam level" [H3, H5]
+Scenario10 for UCA31 "The mode is initialization and the steam level is adequate. But the Controller believes that it is zero, so that
+                     it sends the control action progReady. This could occur, when:
+                        - Failure of the steam level sensor
+                        - delayed response from the steam level sensor
+                        - the steam level sensor has a drift in its data, due to wear over time, leading to a wrong feedback
+                        - depending on the specific type of steam level sensor, there could be other problems caused by the environment
+                          (rapid temperature changes, wet steam, blockage, condensation, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the steam level" [H3, H5]
+Scenario11 for UCA32 "The mode is initialization and the valve is open. But the Controller believes that it is closed, so that
+                      it sends the control action progReady. This could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1, H3, H4, H5]
+Scenario12 for UCA33 "The program detected a transmission failure but the Controller still sends the progReady control actions, because it
+                      believes that there was no transmission failure. This could occur when:
+                        - the control algorithm of the Controller is delayed and detected the transmssion failure too late
+                        - the control algorithm is flawed and didn't detect the transmission failure" [H3, H5]
+Scenario13 for UCA34 "The Controller fails when the mode is initialization and the units are ready, causing the mode change control action not to 
+                      be provided" [H1, H3, H4, H5]
+Scenario14 for UCA34 "The mode is initialization and the units are ready, but the controller believes that the units aren't ready. This could
+                      occur because: 
+                        - The transmission that the units are ready were lost, but the timer for transmission error wasn't finished
+                        - error in the controllers' software leading to a wrong interpretation of the ready signal" [H1, H3, H4, H5]
+Scenario15 for UCA35 "The Controller fails when the mode is initialization and the steamLevel is adequate, causing the mode change control action not to 
+                      be provided" [H3, H5]
+Scenario16 for UCA35 "The mode is initialization and the steamLevel is adequate, but the controller believes that the steam level is zero. This could
+                      occur because: 
+                        - Failure of the steam level sensor
+                        - delayed response from the steam level sensor
+                        - the steam level sensor has a drift in its data, due to wear over time, leading to a wrong feedback
+                        - depending on the specific type of steam level sensor, there could be other problems caused by the environment
+                          (rapid temperature changes, wet steam, blockage, condensation, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the steam level" [H3, H5]
+Scenario17 for UCA36 "The Controller fails when the mode is initialization and the steamLevel is below adequate, causing the mode change control action not to 
+                      be provided" [H3, H5]
+Scenario18 for UCA36 "The mode is initialization and the steamLevel is below adequate, but the controller believes that the steam level is zero. This could
+                      occur because: 
+                        - Failure of the steam level sensor
+                        - delayed response from the steam level sensor
+                        - the steam level sensor has a drift in its data, due to wear over time, leading to a wrong feedback
+                        - depending on the specific type of steam level sensor, there could be other problems caused by the environment
+                          (rapid temperature changes, wet steam, blockage, condensation, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the steam level" [H3, H5]
+Scenario19 for UCA37 "The Controller fails when the mode is initialization and the valve is defective, causing the mode change control action not to 
+                      be provided" [H3, H5]
+Scenario20 for UCA35 "The mode is initialization and the valve is defective, but the controller believes that the valve is intact. This could
+                      occur because: 
+                        - Failure of the valve feedback
+                        - delayed response from the valve that is sending the state
+                        - the feedback of the water level sensor is wrong, causing a wrong interpretation of the valve status
+                        - error in the controllers' software leading to a wrong interpretation of the valve status" [H3, H5]
+// the valve is defective, when the water level doesn't change when the valve should be open or
+// when the water level changes, the pumps are off and the heat is off, and the valve should be closed
+Scenario21 for UCA38 "The Controller fails when the mode is initialization and the levelSensor is defective, causing the mode change control action not to 
+                      be provided" [H3, H5]
+Scenario22 for UCA38 "The mode is initialization and the levelSensor is defective, but the controller believes that the levelSensor is intact. This could
+                      occur because: 
+                        - delayed response from the levelSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the levelSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the levelSensor status
+                        - the levelSensor feedback is incorrect but still compatible with the system dynamics" [H3, H5] 
+Scenario23 for UCA39 "The Controller fails when the mode is initialization and the steamSensor is defective, causing the mode change control action not to 
+                      be provided" [H4, H5]
+Scenario24 for UCA39 "The mode is initialization and the steamSensor is defective, but the controller believes that the steamSensor is intact. This could
+                      occur because: 
+                        - delayed response from the steamSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the steamSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the steamSensor status
+                        - the steamSensor feedback is incorrect but still compatible with the system dynamics" [H4, H5]
+Scenario25 for UCA40 "The Controller fails when the mode is initialization and the pumpSystem is defective, causing the mode change control action not to 
+                      be provided" [H5]
+Scenario26 for UCA40 "The mode is initialization and the pumpSystem is defective, but the controller believes that the pumpSystem is intact. This could
+                      occur because: 
+                        - delayed response from the pumpController
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pumpController feedback" [H5]
+Scenario27 for UCA41 "The Controller fails when the mode is normal and the waterLevel is below normal, causing the mode change control action not to 
+                      be provided" [H1.1, H3, H5]
+Scenario28 for UCA41 "The mode is normal and the waterLevel is below normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H5]
+Scenario29 for UCA42 "The Controller fails when the mode is normal and the waterLevel is above normal, causing the mode change control action not to 
+                      be provided" [H1.2, H3, H5]
+Scenario30 for UCA42 "The mode is normal and the waterLevel is above normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H3, H5]
+Scenario31 for UCA43 "The Controller fails when the mode is normal and the levelSensor is defective, causing the mode change control action not to 
+                      be provided" [H1, H3, H5]
+Scenario32 for UCA43 "The mode is normal and the levelSensor is defective, but the controller believes that the levelSensor is intact. This could
+                      occur because: 
+                        - delayed response from the levelSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the levelSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the levelSensor status
+                        - the levelSensor feedback is incorrect but still compatible with the system dynamics" [H1, H3, H5]
+Scenario33 for UCA44 "The Controller fails when the mode is normal and the steamSensor is defective, causing the mode change control action not to 
+                      be provided" [H4, H5]
+Scenario34 for UCA44 "The mode is normal and the steamSensor is defective, but the controller believes that the steamSensor is intact. This could
+                      occur because: 
+                        - delayed response from the steamSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the steamSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the steamSensor status
+                        - the steamSensor feedback is incorrect but still compatible with the system dynamics" [H4, H5]
+Scenario35 for UCA45 "The Controller fails when the mode is normal and the pumpSystem is defective, causing the mode change control action not to 
+                      be provided" [H5]
+Scenario36 for UCA45 "The mode is normal and the pumpSystem is defective, but the controller believes that the pumpSystem is intact. This could
+                      occur because: 
+                        - delayed response from the pumpController
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pumpController feedback" [H5]
+Scenario37 for UCA46 "The Controller fails when the mode is degraded and the waterLevel is below normal, causing the mode change control action not to 
+                      be provided" [H1.1, H3, H5]
+Scenario38 for UCA46 "The mode is degraded and the waterLevel is below normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H5]
+Scenario39 for UCA47 "The Controller fails when the mode is degraded and the waterLevel is above normal, causing the mode change control action not to 
+                      be provided" [H1.2, H3, H5]
+Scenario40 for UCA47 "The mode is degraded and the waterLevel is above normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H3, H5]
+Scenario41 for UCA48 "The Controller fails when the mode is degraded and the levelSensor is defective, causing the mode change control action not to 
+                      be provided" [H1, H3, H5]
+Scenario42 for UCA48 "The mode is degraded and the levelSensor is defective, but the controller believes that the levelSensor is intact. This could
+                      occur because: 
+                        - delayed response from the levelSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the levelSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the levelSensor status
+                        - the levelSensor feedback is incorrect but still compatible with the system dynamics" [H1, H3, H5]
+Scenario43 for UCA49 "The Controller fails when the mode is degraded and the steamSensor as well as the pumpSystem is no longer defective, causing the mode 
+                      change control action not to be provided" [H5]
+Scenario44 for UCA49 "The mode is degraded and the steamSensor as well as the pumpSystem is no longer defective, but the controller believes that the one 
+                      or both are still defective. This could occur because: 
+                        - sensor could again be functioning, but we get noise that gets interpreted as failure
+                        - delayed response from one or both systems
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the steamSensor status or pumpController feedback
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the steamSensor status" [H5]
+Scenario45 for UCA50 "The Controller fails when the mode is rescue and the waterLevel is below normal, causing the mode change control action not to 
+                      be provided" [H1.1, H3, H5]
+Scenario46 for UCA50 "The mode is rescue and the waterLevel is below normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H5]
+Scenario47 for UCA51 "The Controller fails when the mode is rescue and the waterLevel is above normal, causing the mode change control action not to 
+                      be provided" [H1.2, H3, H5]
+Scenario48 for UCA51 "The mode is rescue and the waterLevel is above normal, but the controller believes that the waterLevel is normal. This could
+                      occur because: 
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H3, H5]
+Scenario49 for UCA52 "The Controller fails when the mode is rescue and the steamSensor is defective, causing the mode change control action not to 
+                      be provided" [H1, H3, H4, H5]
+Scenario50 for UCA52 "The mode is rescue and the steamSensor is defective, but the controller believes that the steamSensor is intact. This could
+                      occur because: 
+                        - delayed response from the steamSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the steamSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the steamSensor status
+                        - the steamSensor feedback is incorrect but still compatible with the system dynamics" [H1, H3, H4, H5]
+Scenario51 for UCA53 "The Controller fails when the mode is rescue and the complete pumpSystem is defective, causing the mode change control action not to 
+                      be provided" [H1, H3, H4, H5]
+Scenario52 for UCA53 "The mode is rescue and the pumpSystem is completely broken, but the controller believes that the pumpSystem is at least partly functioning,
+                      so that it could still hold the correct throughput. This could occur because: 
+                        - delayed response from the pumpController
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pumpController feedback" [H1, H3, H4, H5]
+Scenario53 for UCA54 "The Controller fails when the mode is rescue and the levelSensor is no longer defective, causing the mode change control action not to 
+                      be provided" [H1, H3, H5]
+Scenario54 for UCA54 "The mode is rescue and the levelSensor is no longer defective, but the controller believes that the levelSensor is still broken, causing the mode 
+                      change control action not to be provided. This could occur because: 
+                        - sensor could again be functioning, but we get noise that gets interpreted as failure
+                        - delayed response from the levelSensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the levelSensor status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the levelSensor status" [H1, H3, H5]
+Scenario55 for UCA55 "The Controller fails when the mode is rescue and the steamSensor, the pumpSystem as well as the levelSensor are no longer defective, 
+                      causing the mode change control action not to be provided" [H5]
+Scenario56 for UCA55 "The mode is rescue and the steamSensor, the pumpSystem as well as the levelSensor are no longer defective, but the controller believes that the 
+                      one or all systems are still broken, causing the mode change control action not to be provided. This could occur because: 
+                        - sensor could again be functioning, but we get noise that gets interpreted as failure
+                        - delayed response from one or all systems
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the steamSensor or levelSensor status or pumpController feedback
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the steamSensor or levelSensor status" [H5]
+Scenario57 for UCA56 "The Controller fails when the system detected a transmission failure, causing the mode change control action not to be provided" [H3, H5]
+Scenario58 for UCA70 "The Controller fails when the mode is initialization, the water level is above the boundary and the valve is still closed,
+                      causing the control action to open the valve not to be provided." [H1.2, H4]
+Scenario59 for UCA70 "The mode is initialization, the water level is above the boundary 
+                      and the valve is still closed but the Controller believes that the 
+                      valve is already open. So that the control action to open the 
+                      valve is not provided. This could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong 
+                          reading of a state
+                        - error in the controllers' software leading to a wrong 
+                          interpretation of the valve state" [H1.2, H4]
+Scenario60 for UCA70 "The mode is initialization, the water level is above the boundary and the valve is still closed but the Controller believes
+                      that the water level is inside its boundaries. So that the control action to open the valve is not provided. This could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H4]
+Scenario61 for UCA71 "The Controller fails when the mode is initialization, the water level is inside the boundary and the valve is open,
+                      causing the control action to close the valve not to be provided." [H1.1, H3, H4]
+Scenario62 for UCA71 "The mode is initialization, the water level is inside its boundaries and the valve is open but the Controller believes
+                      that the valve is already closed. So that the control action to close the valve is not provided. This could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1.1, H3, H4]
+Scenario63 for UCA71 "The mode is initialization, the water level is inside its boundaries and the valve is open but the Controller believes
+                      that the water level is above its boundaries. So that the control action to close the valve is not provided. This could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H4]
+Scenario64 for UCA72 "The Controller fails when the mode is initialization, the water level is below the boundary and the valve is still open,
+                      causing the control action to close the valve not to be provided." [H1.1, H3, H4]
+Scenario65 for UCA72 "The mode is initialization, the water level is below its boundaries and the valve is open but the Controller believes
+                      that the valve is already closed. So that the control action to close the valve is not provided. This could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1.1, H3, H4]
+Scenario66 for UCA72 "The mode is initialization, the water level is below its boundaries and the valve is open but the Controller believes
+                      that the water level is above its boundaries. So that the control action to close the valve is not provided. This could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H4]
+Scenario67 for UCA73 "The mode is normal but the Controller provides the valve control actions because it believes that the mode is initialization, 
+                      resulting in falsely moving the valve. This flawed model will occur when the following holds:
+                        - The mode change from the Controller is delayed
+                        - The Controller calculated the wrong mode" [H1, H3, H4, H5]
+Scenario68 for UCA74 "The mode is degarded but the Controller provides the valve control actions because it believes that the mode is initialization, 
+                      resulting in falsely moving the valve. This flawed model will occur when the following holds:
+                        - The mode change from the Controller is delayed
+                        - The Controller calculated the wrong mode" [H1, H3, H4, H5]
+Scenario69 for UCA75 "The mode is rescue but the Controller provides the valve control actions because it believes that the mode is initialization, 
+                      resulting in falsely moving the valve. This flawed model will occur when the following holds:
+                        - The mode change from the Controller is delayed
+                        - The Controller calculated the wrong mode" [H1, H3, H4, H5]
+Scenario70 for UCA76 "The mode is emergencyStop but the Controller provides the valve control actions because it believes that the mode is initialization, 
+                      resulting in falsely moving the valve. This flawed model will occur when the following holds:
+                        - The mode change from the Controller is delayed
+                        - The Controller calculated the wrong mode" [H5]
+Scenario71 for UCA77 "The mode is initialization, the water level is inside the boundary and the valve is closed but the Controller believes
+                      that the valve is still open. For this reason, it provides the command to toggle the valve which leads to falsely open
+                      the valve. This wrong believe could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1.1, H3, H4]
+Scenario72 for UCA77 "The mode is initialization, the water level is inside the boundary and the valve is closed but the Controller believes
+                      that the water level is still above the boundary. For this reason, it provides the command to toggle the valve which
+                      leads to falsely close the valve. This wrong believe could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H4]
+Scenario73 for UCA78 "The mode is initialization, the water level is below the boundary and the valve is closed but the Controller believes
+                      that the valve is still open. For this reason, it provides the command to toggle the valve which leads to falsely open
+                      the valve. This wrong believe could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1.1, H3, H4]
+Scenario74 for UCA78 "The mode is initialization, the water level is below the boundary and the valve is closed but the Controller believes
+                      that the water level is still above the boundary. For this reason, it provides the command to toggle the valve which
+                      leads to falsely close the valve. This wrong believe could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H3, H4]
+Scenario75 for UCA79 "The mode is initialization, the water level is above normal, the valve is closed. The processing of the correct valve state
+                      was delayed, so that the action to open the valve came too late." [H1.2, H4]
+Scenario76 for UCA79 "The mode is initialization, the water level is above normal, the valve is closed. The transmission of the correct valve state
+                      was delayed, so that the action to open the valve came too late and was already detected as a transmission failure." [H1.2, H4]
+Scenario77 for UCA80 "The mode is initialization, the water level is inside the boundaries, the valve is open. The processing of the correct valve state
+                      was delayed, so that the action to close the valve came too late." [H1.1, H3, H4]
+Scenario78 for UCA80 "The mode is initialization, the water level is inside the boundaries, the valve is open. The transmission of the correct valve state
+                      was delayed, so that the action to close the valve came too late and was already detected as a transmission failure." [H1.1, H3, H4]
+Scenario79 for UCA81 "The mode is initialization, the water level is below normal, the valve is open. The processing of the correct valve state
+                      was delayed, so that the action to close the valve came too late." [H1.1, H3, H4]
+Scenario80 for UCA82 "The mode is initialization, the water level is above the boundary and the valve is open but the Controller believes
+                      that the valve is still closed. For this reason, it provides the command to toggle the valve which leads to falsely close
+                      the valve too-early. This wrong believe could occur, when:
+                        - Failure of the device that measures the state of the valve
+                        - the feedback from the valve indicating its state is delayed
+                        - different environmental factors could lead to the wrong reading of a state
+                        - error in the controllers' software leading to a wrong interpretation of the valve state" [H1.2, H4]
+Scenario81 for UCA82 "The mode is initialization, the water level is above the boundary and the valve is open but the Controller believes
+                      that the water level is already inside the boundary. For this reason, it provides the command to toggle the valve which
+                      leads to falsely close the valve too-early. This wrong believe could occur, when:
+                        - the water level sensor failed
+                        - the response from the water level sensor was delayed
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, water disturbances, impurities in water, scale)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H4]
+Scenario82 for UCA91 "The pumpController fails when the pumps' throughput is below its given limit, causing
+                      the control action to open the pumps not to occur." [H1.1, H3, H4]
+Scenario83 for UCA91 "The water throughput is below the normalLimit. The pumpController doesn't provide the openPumps control action 
+                      because it incorrectly believes the water throughput is higher. This problem may occur when any of the following
+                      holds:
+                        - Failure of the pumps sensors
+                        - Pump sensor feedback is delayed" [H1.1, H3, H4]
+Scenario84 for UCA92 "The water throughput is at the normalLimit. The pumpController doesn't provide the openPumps control action 
+                     because it incorrectly believes the water throughput is higher. This problem may occur when any of the following
+                     holds:
+                        - Failure of the pumps sensors
+                        - Pump sensor feedback is delayed" [H4]
+Scenario85 for UCA93 "The PumpController gets the wrong information from the pumpSensors that the throughput is below the upperLimit
+                     even so it is higher, causing the open pumps action to occur. This could occur when one of the following holds:
+                        - Failure of the pump sensors
+                        - Pump sensor feedback is delayed"  [H1.2, H4]  
+Scenario86 for UCA94 "The program is in emergency_mode but the pumpController provides the openPumps control action, because
+                      it's incorrectly believing that it's in another mode. This flawed model will occur when the following holds:
+                        - The mode change from the Controller is delayed
+                        - The Controller calculated the wrong mode" [H1.1, H3]                 
+Scenario87 for UCA95 "The throughput of the pumps is too low, but the processing of the PumpController is delayed so that the
+                      command to open the pumps is provided too late (throughput belowLimit). As a result, the water level in the 
+                      steam-boiler could become critically low." [H1.1, H3, H4]
+Scenario88 for UCA96 "The command from the PumpController for opening the pumps, when the throughput is too low, gets lost or takes 
+                      too long (>TBS seconds) so that the program detects it as a transmission failure" [H1.1, H3, H4]
+Scenario89 for UCA97 "The pumpController fails when the throughput is at is upperLimit or higher, causing the closePumps control action
+                     not to be provided." [H1.2, H4]
+Scenario90 for UCA98 "The pumpController fails during emegerncy_mode, causing the closePumps control action not to be provided." [H1.2, H3]
+Scenario91 for UCA99 "The water throughput is at its normalLimit. But the pumpController thinks that the throughput is at is higher.
+                     This could occur when one of the following holds:
+                        - Failure of the pump sensors
+                        - Pump sensor feedback is delayed" [H1.1, H4]
+Scenario92 for UCA99 "The water throughput is below its normalLimit. But the pumpController thinks that the throughput is at is higher.
+                     This could occur when one of the following holds:
+                        - Failure of the pump sensors
+                        - Pump sensor feedback is delayed" [H1.1, H4]
+Scenario93 for UCA103 "The pumpController fails when the first pump is defective, and we didn't receive the Ack from the pump for this,
+                       causing the control action to pumpFailDet not occur." [H1, H3, H4, H5]
+Scenario94 for UCA103 "The first pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that the pumps are functional, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the pump sensor failed
+                            - the response from the pump sensor was delayed
+                            - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                             (temperatur changes, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the first pumps status" [H1, H3, H4, H5]
+Scenario95 for UCA103 "The first pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that it got the Ack, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the transmission line is noisy, prompting a wrong interpretation of the noise as Ack
+                            - a packet on the transmission line was corrupted, so that it looked like an Ack from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H1, H3, H4, H5]
+Scenario96 for UCA104 "The pumpController fails when the second pump is defective, and we didn't receive the Ack from the pump for this,
+                       causing the control action to pumpFailDet not occur." [H1, H3, H4, H5]
+Scenario97 for UCA104 "The second pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that the pumps are functional, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the pump sensor failed
+                            - the response from the pump sensor was delayed
+                            - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                             (temperatur changes, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the second pumps status" [H1, H3, H4, H5]
+Scenario98 for UCA104 "The second pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that it got the Ack, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the transmission line is noisy, prompting a wrong interpretation of the noise as Ack
+                            - a packet on the transmission line was corrupted, so that it looked like an Ack from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H1, H3, H4, H5]
+Scenario99 for UCA105 "The pumpController fails when the third pump is defective, and we didn't receive the Ack from the pump for this,
+                       causing the control action to pumpFailDet not occur." [H1, H3, H4, H5]
+Scenario100 for UCA105 "The third pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that the pumps are functional, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the pump sensor failed
+                            - the response from the pump sensor was delayed
+                            - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                             (temperatur changes, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the third pumps status" [H1, H3, H4, H5]
+Scenario101 for UCA105 "The third pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that it got the Ack, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the transmission line is noisy, prompting a wrong interpretation of the noise as Ack
+                            - a packet on the transmission line was corrupted, so that it looked like an Ack from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H1, H3, H4, H5]
+Scenario102 for UCA106 "The pumpController fails when the fourth pump is defective, and we didn't receive the Ack from the pump for this,
+                       causing the control action to pumpFailDet not occur." [H1, H3, H4, H5]
+Scenario103 for UCA106 "The fourth pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that the pumps are functional, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the pump sensor failed
+                            - the response from the pump sensor was delayed
+                            - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                             (temperatur changes, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the fourth pumps status" [H1, H3, H4, H5]
+Scenario104 for UCA106 "The fourth pump is defective, and we didn't receive the Ack from the pump for this, but the pumpController believes
+                       that it got the Ack, causing the control action to pumpFailDet not to be provided. This could occur when:
+                            - the transmission line is noisy, prompting a wrong interpretation of the noise as Ack
+                            - a packet on the transmission line was corrupted, so that it looked like an Ack from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H1, H3, H4, H5]
+Scenario105 for UCA107 "The first pump is not defective but the pumpController believes it is defective, so that it sends a pumpFailDec. This could occur when:
+                            - sensor could again be functioning, but we get noise that gets interpreted as failure
+                            - delayed response from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario106 for UCA108 "The second pump is not defective but the pumpController believes it is defective, so that it sends a pumpFailDec. This could occur when:
+                            - sensor could again be functioning, but we get noise that gets interpreted as failure
+                            - delayed response from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario107 for UCA109 "The third pump is not defective but the pumpController believes it is defective, so that it sends a pumpFailDec. This could occur when:
+                            - sensor could again be functioning, but we get noise that gets interpreted as failure
+                            - delayed response from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario108 for UCA110 "The fourth pump is not defective but the pumpController believes it is defective, so that it sends a pumpFailDec. This could occur when:
+                            - sensor could again be functioning, but we get noise that gets interpreted as failure
+                            - delayed response from the pump
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario109 for UCA111 "The pumpController fails when the first pump is not defective anymore and it got the feedback PUMP_REPAIRED(1), causing the 
+                        pumpRepAck control action not to be provided." [H4, H5]
+Scenario110 for UCA111 "The first pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that the
+                       first pump is still not functional, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - delayed response from the pump sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario111 for UCA111 "The first pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that its
+                        didn't get the repair feedback from the pump, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise
+                        - the packet for the repair on the transmission line was corrupted
+                        - delayed response from the pump
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H4, H5]
+Scenario112 for UCA112 "The pumpController fails when the second pump is not defective anymore and it got the feedback PUMP_REPAIRED(1), causing the 
+                        pumpRepAck control action not to be provided." [H4, H5]
+Scenario113 for UCA112 "The second pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that the
+                       second pump is still not functional, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - delayed response from the pump sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario114 for UCA112 "The second pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that its
+                       didn't get the repair feedback from the pump, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise
+                        - the packet for the repair on the transmission line was corrupted
+                        - delayed response from the pump
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H4, H5]
+Scenario115 for UCA113 "The pumpController fails when the third pump is not defective anymore, and it got the feedback PUMP_REPAIRED(1), causing the 
+                        pumpRepAck control action not to be provided." [H4, H5]
+Scenario116 for UCA113 "The third pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that the
+                       third pump is still not functional, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - delayed response from the pump sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario117 for UCA113 "The third pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that its
+                       didn't get the repair feedback from the pump, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise
+                        - the packet for the repair on the transmission line was corrupted
+                        - delayed response from the pump
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H4, H5]
+Scenario118 for UCA114 "The pumpController fails when the fourth pump is not defective anymore and it got the feedback PUMP_REPAIRED(1), causing the 
+                        pumpRepAck control action not to be provided." [H4, H5]
+Scenario119 for UCA114 "The fourth pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that the
+                       fourth pump is still not functional, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - delayed response from the pump sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario120 for UCA114 "The fourth pump is not defective and the pumpController did receive an PUMP_REPAIRED(1) feedback, but the pumpController believes that its
+                       didn't get the repair feedback from the pump, causing the pumpRepAck control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise
+                        - the packet for the repair on the transmission line was corrupted
+                        - delayed response from the pump
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump feedback" [H4, H5]
+Scenario121 for UCA115 "The first pump is defective but the pumpController believes it's again functional, causing the pumpRepAck action
+                        to be provided. This could occur when:
+                            - delayed response from the pump sensor
+                            - controller considers a wrong pump in his calculations
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario122 for UCA116 "The second pump is defective but the pumpController believes it's again functional, causing the pumpRepAck action
+                        to be provided. This could occur when:
+                            - delayed response from the pump sensor
+                            - controller considers a wrong pump in his calculations
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario123 for UCA117 "The third pump is defective but the pumpController believes it's again functional, causing the pumpRepAck action
+                        to be provided. This could occur when:
+                            - delayed response from the pump sensor
+                            - controller considers a wrong pump in his calculations
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario124 for UCA118 "The fourth pump is defective but the pumpController believes it's again functional, causing the pumpRepAck action
+                        to be provided. This could occur when:
+                            - delayed response from the pump sensor
+                            - controller considers a wrong pump in his calculations
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the pump status" [H4, H5]
+Scenario125 for UCA119 "The OutsideController fails when the heat is below normal, causing the heaterOn control action to not
+                     be provided." [H1.2, H2, H4]
+Scenario126 for UCA119 "The heat is below normal, but the Controller believes it is above normal, causing the HeaterOn 
+                     control action to be not provided. This could occur if:
+                        - the heater sensor failed
+                        - the response from the heater sensor was delayed
+                        - the heater sensor wasn't properly calibrated before the heater was started
+                        - the heater sensor wasn't correctly installed / repaired before the heater was started
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H2, H4]
+Scenario127 for UCA120 "The OutsideController fails when the heat is normal, causing the heaterOff control action to not
+                     be provided." [H1.2, H4]
+Scenario128 for UCA120 "The heat is normal, but the Controller believes it is above normal, causing the HeaterOn 
+                       control action to be not provided. This could occur if:
+                        - the heater sensor failed
+                        - the response from the heater sensor was delayed
+                        - the heater sensor wasn't properly calibrated before the heater was started
+                        - the heater sensor wasn't correctly installed / repaired before the heater was started
+                        - due to wear over the time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                        - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H4]
+Scenario129 for UCA123 "The heat is at below aboveNormal but the processing within the OutsideController is delayed so that the HeaterOn
+                       control action is provided too-late when the heat is already belowLimit" [H1.2, H2, H4]
+Scenario130 for UCA122 "The heater is defective but the OusideController believes it fully functioning, causing a hazardous action when
+                       the HeaterOn control action is provided. This could occur when:
+                            - the heater sensor failed
+                            - the response from the heater sensor was delayed
+                            - the heater sensor wasn't properly calibrated before the heater was started
+                            - the heater sensor wasn't correctly installed / repaired before the heater was started
+                            - due to wear over time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                            (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the water level
+                            - the operator repaired the heater incorrectly, so that the heater provided a repair message which is incorrect" [H3, H4]
+Scenario131 for UCA121 "The heat is aboveNormal but the OusideController believes it is lower, causing the HeaterOn action to be provided, when
+                        its dangerous. This could occur when:
+                            - the heater sensor failed
+                            - the response from the heater sensor was delayed
+                            - the heater sensor wasn't properly calibrated before the heater was started
+                            - the heater sensor wasn't correctly installed / repaired before the heater was started
+                            - due to wear over time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                            (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H2, H3, H4]
+Scenario132 for UCA124 "The heat is at below aboveNormal but the transmission of the HeaterOn control action takes too-long, so that it is 
+                       already detected as a transmission error." [H1.1, H2, H3, H4]
+Scenario133 for UCA125 "The OutsideController fails when the heat is above normal, causing the heaterOff control action to not
+                       be provided." [H1.1, H2, H3, H4]
+Scenario134 for UCA125 "The heat is above normal, but the Controller believes it is normal or below normal, causing the HeaterOff 
+                       control action to be not provided. This could occur if:
+                        - the heater sensor failed
+                        - the response from the heater sensor was delayed
+                        - the heater sensor wasn't properly calibrated before the heater was started
+                        - the heater sensor wasn't correctly installed / repaired before the heater was started
+                        - due to wear over time, has the sensor a drift in its data, leading to a wrong feedback
+                        - depending on the specific sensor used, there could be different inferences with the signal
+                          (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                         - error in the controllers' software leading to a wrong interpretation of the water level" [H1.1, H2, H3, H4]
+Scenario135 for UCA126 "The heat is normal but the OusideController believes it is higher, causing the HeaterOff action to be provided. 
+                       This could occur when:
+                            - the heater sensor failed
+                            - the response from the heater sensor was delayed
+                            - the heater sensor wasn't properly calibrated before the heater was started
+                            - the heater sensor wasn't correctly installed / repaired before the heater was started
+                            - due to wear over time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                            (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                            - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H4]
+Scenario136 for UCA127 "The heat is below normal but the OusideController believes it is above normal, causing the HeaterOff action to be provided. 
+                       This could occur when:
+                            - the heater sensor failed
+                            - the response from the heater sensor was delayed
+                            - the heater sensor wasn't properly calibrated before the heater was started
+                            - the heater sensor wasn't correctly installed / repaired before the heater was started
+                            - due to wear over time, has the sensor a drift in its data, leading to a wrong feedback
+                            - depending on the specific sensor used, there could be different inferences with the signal
+                            (temperatur changes, electromagnetic interference, electrical noise, moisture, dust / debris)
+                          - error in the controllers' software leading to a wrong interpretation of the water level" [H1.2, H2, H4]
+Scenario137 for UCA128 "The heat is at above normal but the processing within the OutsideController is delayed so that the HeaterOff
+                        control action is provided too-late when the heat is already aboveLimit " [H1.1, H2, H3, H4]
+Scenario138 for UCA129 "The heat is aboveNormal but the transmission of the HeaterOff control action takes too-long, so that it is 
+                        already detected as a transmission error." [H1.1, H2, H3, H4]
+Scenario139 for UCA130 "The OutsideController fails when the heater is defective and the OutsideController didn't receive an Ack for this,
+                       causing the heaterFailDec control action not to be provided." [H2, H3, H4]
+// heater is defective, when its value lies outside the possible limits or when the program detects that the unit indicates a value which is
+// incompatible with the dynamics of the system
+Scenario140 for UCA130 "The heater is defective and the OutsideController didn't receive an Ack for this, but the OutsideController believes that the
+                       heater is still functional, causing the heaterFailDec control action not to be provided. This could occur when:
+                        - delayed response from the heat sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the heater status 
+                        - the heat sensor feedback is incorrect but still compatible with the system dynamics" [H2, H3, H4]
+Scenario141 for UCA130 "The heater is defective and the OutsideController didn't receive an Ack for this, but the OutsideController believes that its
+                       got the ack from the heater, causing the heaterFailDec control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise as Ack
+                        - a packet on the transmission line was corrupted, so that it looked like an Ack from the heater
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater feedback" [H2, H3, H4]
+Scenario142 for UCA131 "The heater is not defective but the OutsideController believes it is defective, so that it sends a heaterFailDec. This could occur when:
+                            - sensor could again be functioning, but we get noise that gets interpreted as failure
+                            - delayed response from the heater
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater status
+                            - the system dynamics are not well defined, leading the controller to a wrong interpretation of the heater status" [H4, H5]
+Scenario143 for UCA132 "The heater is defective but the processing of the OutsideController is delayed so that the command that indicates a failure
+                        of the heater is given too late." [H2, H3, H4]
+Scenario144 for UCA133 "The OutsideController fails when the heater is not defective anymore but it was defective the step before, which means that the 
+                       OutsideController got the feedback Heater_repair, causing the heaterRepAck control action not to be provided." [H4, H5]
+Scenario145 for UCA133 "The heater is not defective and the OutsideController did receive an Heater_repair feedback, but the OutsideController believes that the
+                       heater is still not functional, causing the heaterRepAck control action not to be provided. This could occur when:
+                        - delayed response from the heat sensor
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater status
+                        - the system dynamics are not well defined, leading the controller to a wrong interpretation of the heater status 
+                        - the heat sensor feedback is incorrect but still compatible with the system dynamics" [H4, H5]
+Scenario146 for UCA133 "The heater is not defective and the OutsideController did receive a Heater_repair feedback, but the OutsideController believes that its
+                       didn't get the repair feedback from the heater, causing the heaterRepAck control action not to be provided. This could occur when:
+                        - the transmission line is noisy, prompting a wrong interpretation of the noise
+                        - the packet for the repair on the transmission line was corrupted
+                        - delayed response from the heater
+                        - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater feedback" [H4, H5]
+Scenario147 for UCA134 "The heater is defective but the OutsideController believes it's again functional, causing the heaterRepAck action
+                        to be provided. This could occur when:
+                            - delayed response from the heat sensor
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater status
+                            - the system dynamics are not well defined, leading the controller to a wrong interpretation of the heater status 
+                            - the heat sensor feedback is incorrect but still compatible with the system dynamics" [H2, H3, H4]
+Scenario148 for UCA135 "The heater was before not defective but the OutsideController believes it was, causing the heaterRepAck action
+                        to be provided. This could occur when:
+                            - error in the controllers' software (logical errors) leading to a wrong interpretation of the heater status
+                            - the system dynamics are not well defined, leading the controller to a wrong interpretation of the heater status" [H5]
+Scenario149 for UCA136 "The is not defective and the OutsideController did receive a Heater_repair feedback, but the processing of the controller
+                        was delayed so that the acknowledgement of the repair signal is given too late." [H4, H5]
+                       
